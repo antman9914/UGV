@@ -15,6 +15,6 @@ python G2PM/pretrain.py --dataset computers;cora;arxiv --use_params
 
 ## TODO
 
-The adaptability of multi-graph setting to graph classification task needs further improvement.
+The adaptability of multi-graph setting to graph classification task potentially needs improvement.
 
 Can't use node classification datasets and graph classification datasets at the same time for now.
