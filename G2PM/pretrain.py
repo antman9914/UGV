@@ -158,6 +158,9 @@ def run(params):
     # After VQ-Pretrain, freeze tokenizer, vocab and decoder
     if not params['use_vq']:
         vq_path = osp.join(params['save_vq'], params['dataset'], f"{params['save_name']}.pt")
+        if not osp.exists(vq_path):
+            print("Tokenizer is not found!")
+            exit(1)
         model.load_state_dict(torch.load(vq_path, map_location=device))
         model.freeze_tokenizer()
 
