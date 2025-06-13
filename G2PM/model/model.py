@@ -448,7 +448,7 @@ class BaseModel(nn.Module):
             e_feat = None
             eids = None
 
-        if params['dataset'] in mol_graphs:
+        if dataset in mol_graphs:
             feat = self.atom_encoder(feat)
             if e_feat is not None:
                 e_feat = self.bond_encoder(e_feat)
