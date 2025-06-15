@@ -300,8 +300,8 @@ def run(params):
             # Save model checkpoint
             torch.save(model.state_dict(), checkpoint_path)
             print(f'Model checkpoint saved at epoch {epoch} to {checkpoint_path}')
-            if epoch == 20:
-                break
+            # if epoch == 20:
+            #     break
 
 
     # if not params['use_vq']:
