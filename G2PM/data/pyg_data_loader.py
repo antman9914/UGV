@@ -117,8 +117,8 @@ def get_graph_split(dataset):
     return split
 
 
-def load_node_task(params):
-    name = params['dataset']
+def load_node_task(name, params):
+    # name = params['dataset']
     data_path = params['data_path']
     split_setting = params['split']
     repeat = params['split_repeat']
@@ -135,49 +135,162 @@ def load_node_task(params):
         raise ValueError("Node positional encoding error!")
     
     # For multi-graph setting
-    name_set = name.strip().split(';')
-    graph_set, split_set = {}, {}
 
-    for name in name_set:
-        if name in ['cora', 'citeseer', 'pubmed']:
-            dataset = Planetoid(data_path, name, transform=transform)
-            graph = dataset[0]
+    # for name in name_set:
+    if name in ['cora', 'citeseer', 'pubmed']:
+        dataset = Planetoid(data_path, name, transform=transform)
+        graph = dataset[0]
 
-            if split_setting == 'public':
-                train_mask = graph.train_mask
-                val_mask = graph.val_mask
-                test_mask = graph.test_mask
-                splits = [{'train': train_mask, 'val': val_mask, 'test': test_mask}] * repeat
-            else:
-                splits = [get_split(graph, split_setting) for _ in range(repeat)]
-
-        elif name in ['cora_full']:
-            dataset = CoraFull(root=data_path, transform=transform)
-            graph = dataset[0]
+        if split_setting == 'public':
+            train_mask = graph.train_mask
+            val_mask = graph.val_mask
+            test_mask = graph.test_mask
+            splits = [{'train': train_mask, 'val': val_mask, 'test': test_mask}] * repeat
+        else:
             splits = [get_split(graph, split_setting) for _ in range(repeat)]
 
-        elif name in ['acm', 'dblp']:
-            dataset = CitationNetworkDataset(data_path, name, transform=transform)
-            graph = dataset[0]
-            splits = [get_split(graph, split_setting) for _ in range(repeat)]
+    elif name in ['cora_full']:
+        dataset = CoraFull(root=data_path, transform=transform)
+        graph = dataset[0]
+        splits = [get_split(graph, split_setting) for _ in range(repeat)]
 
-        elif name in ['computers', 'photo']:
-            dataset = Amazon(data_path, name, transform=transform)
-            graph = dataset[0]
-            splits = [get_split(graph, split_setting) for _ in range(repeat)]
+    elif name in ['acm', 'dblp']:
+        dataset = CitationNetworkDataset(data_path, name, transform=transform)
+        graph = dataset[0]
+        splits = [get_split(graph, split_setting) for _ in range(repeat)]
 
-        elif name in ['cs', 'physics']:
-            dataset = Coauthor(data_path, name, transform=transform)
-            graph = dataset[0]
-            splits = [get_split(graph, split_setting) for _ in range(repeat)]
+    elif name in ['computers', 'photo']:
+        dataset = Amazon(data_path, name, transform=transform)
+        graph = dataset[0]
+        splits = [get_split(graph, split_setting) for _ in range(repeat)]
 
-        elif name in ['wikics']:
-            data_path = osp.join(data_path, 'wikics')
-            dataset = WikiCS(data_path, transform=transform)
-            graph = dataset[0]
+    elif name in ['cs', 'physics']:
+        dataset = Coauthor(data_path, name, transform=transform)
+        graph = dataset[0]
+        splits = [get_split(graph, split_setting) for _ in range(repeat)]
 
-            assert split_setting == 'public'
+    elif name in ['wikics']:
+        data_path = osp.join(data_path, 'wikics')
+        dataset = WikiCS(data_path, transform=transform)
+        graph = dataset[0]
 
+        assert split_setting == 'public'
+
+        train_mask = graph.train_mask
+        val_mask = graph.val_mask
+        test_mask = graph.test_mask
+
+        splits = []
+        for i in range(train_mask.shape[1]):
+            splits.append({
+                'train': train_mask[:, i].bool(),
+                'val': val_mask[:, i].bool(),
+                'test': test_mask.bool(),
+            })
+
+    elif name in ['flickr']:
+        data_path = osp.join(data_path, 'flickr_large')
+        dataset = Flickr(data_path, transform=transform)
+        graph = dataset[0]
+
+        assert split_setting == 'public'
+
+        train_mask, val_mask, test_mask = graph.train_mask, graph.val_mask, graph.test_mask
+        splits = [{'train': train_mask, 'val': val_mask, 'test': test_mask}] * repeat
+
+    elif name in ['yelp']:
+        data_path = osp.join(data_path, 'yelp')
+        dataset = Yelp(data_path, transform=transform)
+        graph = dataset[0]
+
+        assert split_setting == 'public'
+
+        train_mask, val_mask, test_mask = graph.train_mask, graph.val_mask, graph.test_mask
+        splits = [{'train': train_mask, 'val': val_mask, 'test': test_mask}] * repeat
+
+    elif name in ['reddit']:
+        data_path = osp.join(data_path, 'reddit')
+        dataset = Reddit2(data_path, transform=transform)
+        graph = dataset[0]
+
+        assert split_setting == 'public'
+
+        train_mask, val_mask, test_mask = graph.train_mask, graph.val_mask, graph.test_mask
+        splits = [{'train': train_mask, 'val': val_mask, 'test': test_mask}] * repeat
+
+    elif name in ['arxiv', 'products']:
+        data_path = osp.join(data_path, name)
+        dataset = PygNodePropPredDataset(f'ogbn-{name}', root=data_path, transform=transform)
+        graph = dataset[0]
+
+        assert split_setting == 'public'
+
+        split = dataset.get_idx_split()
+        train_mask = idx2mask(split['train'], graph.num_nodes)
+        val_mask = idx2mask(split['valid'], graph.num_nodes)
+        test_mask = idx2mask(split['test'], graph.num_nodes)
+
+        splits = [{'train': train_mask, 'val': val_mask, 'test': test_mask}] * repeat
+
+        # return graph, splits
+
+    elif name in ['proteins']:
+        # get node features
+        data_path = osp.join(data_path, name)
+        dataset = PygNodePropPredDataset(f'ogbn-proteins', root=data_path, transform=transform)
+        graph = dataset[0]
+
+        preprocess = T.ToSparseTensor(attr='edge_attr')
+        graph.x = preprocess(graph).adj_t.mean(dim=1)
+        graph.edge_attr = None
+
+        assert split_setting == 'public'
+
+        split = dataset.get_idx_split()
+        train_mask = idx2mask(split['train'], graph.num_nodes)
+        val_mask = idx2mask(split['valid'], graph.num_nodes)
+        test_mask = idx2mask(split['test'], graph.num_nodes)
+
+        splits = [{'train': train_mask, 'val': val_mask, 'test': test_mask}] * repeat
+
+        # return graph, splits
+
+    elif name in ['pokec']:
+        dataset = load_pokec_mat(data_path)
+
+        x = dataset.graph['node_feat']
+        edge_index = dataset.graph['edge_index']
+        y = dataset.label
+
+        graph = Data(x=x, edge_index=edge_index, y=y)
+        graph = transform(graph)
+
+        assert split_setting == 'public'
+
+        split = dataset.get_idx_split()
+        train_mask = idx2mask(split['train'], dataset.graph['num_nodes'])
+        val_mask = idx2mask(split['valid'], dataset.graph['num_nodes'])
+        test_mask = idx2mask(split['test'], dataset.graph['num_nodes'])
+
+        splits = [{'train': train_mask, 'val': val_mask, 'test': test_mask}] * repeat
+
+        # return graph, splits
+
+    elif name in ['blog', 'flickr_small', 'PPI']:
+        name_map = {'blog': 'BlogCatalog', 'flickr_small': 'Flickr'}
+        name = name_map[name]
+        dataset = AttributedGraphDataset(data_path, name, transform=transform)
+        graph = dataset[0]
+
+        splits = [get_split(graph, split_setting) for _ in range(repeat)]
+
+        # return graph, splits
+
+    elif name in ['cornell', 'wisconsin', 'texas']:
+        dataset = WebKB(data_path, name, transform=transform)
+        graph = dataset[0]
+
+        if split_setting == 'public':
             train_mask = graph.train_mask
             val_mask = graph.val_mask
             test_mask = graph.test_mask
@@ -187,235 +300,120 @@ def load_node_task(params):
                 splits.append({
                     'train': train_mask[:, i].bool(),
                     'val': val_mask[:, i].bool(),
-                    'test': test_mask.bool(),
+                    'test': test_mask[:, i].bool(),
+                })
+        else:
+            splits = [get_split(graph, split_setting) for _ in range(repeat)]
+
+    elif name in ['chameleon', 'squirrel']:
+        dataset = WikipediaNetwork(data_path, name, transform=transform, geom_gcn_preprocess=True)
+        graph = dataset[0]
+
+        if split_setting == 'public':
+            train_mask = graph.train_mask
+            val_mask = graph.val_mask
+            test_mask = graph.test_mask
+
+            splits = []
+            for i in range(train_mask.shape[1]):
+                splits.append({
+                    'train': train_mask[:, i].bool(),
+                    'val': val_mask[:, i].bool(),
+                    'test': test_mask[:, i].bool(),
+                })
+        else:
+            splits = [get_split(graph, split_setting) for _ in range(repeat)]
+
+        # return graph, splits
+
+    elif name in ['DE', 'EN', 'ES', 'FR', 'PT', 'RU']:
+        dataset = Twitch(data_path, name, transform=transform)
+        graph = dataset[0]
+
+        splits = [get_split(graph, split_setting) for _ in range(repeat)]
+
+    elif name in ['deezer']:
+        dataset = DeezerEurope(data_path, transform=transform)
+        graph = dataset[0]
+
+        splits = [get_split(graph, split_setting) for _ in range(repeat)]
+
+    elif name in ['roman', 'ratings', 'minesweeper', 'tolokers', 'questions']:
+        name_map = {'roman': "roman_empire", "ratings": "amazon-ratings", "minesweeper": "minesweeper",
+                    "tolokers": "tolokers", "questions": "questions"}
+        name = name_map[name]
+
+        dataset = HeterophilousGraphDataset(data_path, name, transform=transform)
+        graph = dataset[0]
+
+        if split_setting == 'public':
+            train_mask = graph.train_mask
+            val_mask = graph.val_mask
+            test_mask = graph.test_mask
+
+            splits = []
+            for i in range(train_mask.shape[1]):
+                splits.append({
+                    'train': train_mask[:, i].bool(),
+                    'val': val_mask[:, i].bool(),
+                    'test': test_mask[:, i].bool(),
                 })
 
-        elif name in ['flickr']:
-            data_path = osp.join(data_path, 'flickr_large')
-            dataset = Flickr(data_path, transform=transform)
-            graph = dataset[0]
-
-            assert split_setting == 'public'
-
-            train_mask, val_mask, test_mask = graph.train_mask, graph.val_mask, graph.test_mask
-            splits = [{'train': train_mask, 'val': val_mask, 'test': test_mask}] * repeat
-
-        elif name in ['yelp']:
-            data_path = osp.join(data_path, 'yelp')
-            dataset = Yelp(data_path, transform=transform)
-            graph = dataset[0]
-
-            assert split_setting == 'public'
-
-            train_mask, val_mask, test_mask = graph.train_mask, graph.val_mask, graph.test_mask
-            splits = [{'train': train_mask, 'val': val_mask, 'test': test_mask}] * repeat
-
-        elif name in ['reddit']:
-            data_path = osp.join(data_path, 'reddit')
-            dataset = Reddit2(data_path, transform=transform)
-            graph = dataset[0]
-
-            assert split_setting == 'public'
-
-            train_mask, val_mask, test_mask = graph.train_mask, graph.val_mask, graph.test_mask
-            splits = [{'train': train_mask, 'val': val_mask, 'test': test_mask}] * repeat
-
-        elif name in ['arxiv', 'products']:
-            data_path = osp.join(data_path, name)
-            dataset = PygNodePropPredDataset(f'ogbn-{name}', root=data_path, transform=transform)
-            graph = dataset[0]
-
-            assert split_setting == 'public'
-
-            split = dataset.get_idx_split()
-            train_mask = idx2mask(split['train'], graph.num_nodes)
-            val_mask = idx2mask(split['valid'], graph.num_nodes)
-            test_mask = idx2mask(split['test'], graph.num_nodes)
-
-            splits = [{'train': train_mask, 'val': val_mask, 'test': test_mask}] * repeat
-
-            # return graph, splits
-
-        elif name in ['proteins']:
-            # get node features
-            data_path = osp.join(data_path, name)
-            dataset = PygNodePropPredDataset(f'ogbn-proteins', root=data_path, transform=transform)
-            graph = dataset[0]
-
-            preprocess = T.ToSparseTensor(attr='edge_attr')
-            graph.x = preprocess(graph).adj_t.mean(dim=1)
-            graph.edge_attr = None
-
-            assert split_setting == 'public'
-
-            split = dataset.get_idx_split()
-            train_mask = idx2mask(split['train'], graph.num_nodes)
-            val_mask = idx2mask(split['valid'], graph.num_nodes)
-            test_mask = idx2mask(split['test'], graph.num_nodes)
-
-            splits = [{'train': train_mask, 'val': val_mask, 'test': test_mask}] * repeat
-
-            # return graph, splits
-
-        elif name in ['pokec']:
-            dataset = load_pokec_mat(data_path)
-
-            x = dataset.graph['node_feat']
-            edge_index = dataset.graph['edge_index']
-            y = dataset.label
-
-            graph = Data(x=x, edge_index=edge_index, y=y)
-            graph = transform(graph)
-
-            assert split_setting == 'public'
-
-            split = dataset.get_idx_split()
-            train_mask = idx2mask(split['train'], dataset.graph['num_nodes'])
-            val_mask = idx2mask(split['valid'], dataset.graph['num_nodes'])
-            test_mask = idx2mask(split['test'], dataset.graph['num_nodes'])
-
-            splits = [{'train': train_mask, 'val': val_mask, 'test': test_mask}] * repeat
-
-            # return graph, splits
-
-        elif name in ['blog', 'flickr_small', 'PPI']:
-            name_map = {'blog': 'BlogCatalog', 'flickr_small': 'Flickr'}
-            name = name_map[name]
-            dataset = AttributedGraphDataset(data_path, name, transform=transform)
-            graph = dataset[0]
-
+        else:
             splits = [get_split(graph, split_setting) for _ in range(repeat)]
 
-            # return graph, splits
+    elif name in ['actor']:
+        data_path = osp.join(data_path, 'actor')
+        dataset = Actor(data_path, transform=transform)
+        graph = dataset[0]
 
-        elif name in ['cornell', 'wisconsin', 'texas']:
-            dataset = WebKB(data_path, name, transform=transform)
-            graph = dataset[0]
+        if split_setting == 'public':
+            train_mask = graph.train_mask
+            val_mask = graph.val_mask
+            test_mask = graph.test_mask
 
-            if split_setting == 'public':
-                train_mask = graph.train_mask
-                val_mask = graph.val_mask
-                test_mask = graph.test_mask
-
-                splits = []
-                for i in range(train_mask.shape[1]):
-                    splits.append({
-                        'train': train_mask[:, i].bool(),
-                        'val': val_mask[:, i].bool(),
-                        'test': test_mask[:, i].bool(),
-                    })
-            else:
-                splits = [get_split(graph, split_setting) for _ in range(repeat)]
-
-        elif name in ['chameleon', 'squirrel']:
-            dataset = WikipediaNetwork(data_path, name, transform=transform, geom_gcn_preprocess=True)
-            graph = dataset[0]
-
-            if split_setting == 'public':
-                train_mask = graph.train_mask
-                val_mask = graph.val_mask
-                test_mask = graph.test_mask
-
-                splits = []
-                for i in range(train_mask.shape[1]):
-                    splits.append({
-                        'train': train_mask[:, i].bool(),
-                        'val': val_mask[:, i].bool(),
-                        'test': test_mask[:, i].bool(),
-                    })
-            else:
-                splits = [get_split(graph, split_setting) for _ in range(repeat)]
-
-            # return graph, splits
-
-        elif name in ['DE', 'EN', 'ES', 'FR', 'PT', 'RU']:
-            dataset = Twitch(data_path, name, transform=transform)
-            graph = dataset[0]
-
-            splits = [get_split(graph, split_setting) for _ in range(repeat)]
-
-        elif name in ['deezer']:
-            dataset = DeezerEurope(data_path, transform=transform)
-            graph = dataset[0]
-
-            splits = [get_split(graph, split_setting) for _ in range(repeat)]
-
-        elif name in ['roman', 'ratings', 'minesweeper', 'tolokers', 'questions']:
-            name_map = {'roman': "roman_empire", "ratings": "amazon-ratings", "minesweeper": "minesweeper",
-                        "tolokers": "tolokers", "questions": "questions"}
-            name = name_map[name]
-
-            dataset = HeterophilousGraphDataset(data_path, name, transform=transform)
-            graph = dataset[0]
-
-            if split_setting == 'public':
-                train_mask = graph.train_mask
-                val_mask = graph.val_mask
-                test_mask = graph.test_mask
-
-                splits = []
-                for i in range(train_mask.shape[1]):
-                    splits.append({
-                        'train': train_mask[:, i].bool(),
-                        'val': val_mask[:, i].bool(),
-                        'test': test_mask[:, i].bool(),
-                    })
-
-            else:
-                splits = [get_split(graph, split_setting) for _ in range(repeat)]
-
-        elif name in ['actor']:
-            data_path = osp.join(data_path, 'actor')
-            dataset = Actor(data_path, transform=transform)
-            graph = dataset[0]
-
-            if split_setting == 'public':
-                train_mask = graph.train_mask
-                val_mask = graph.val_mask
-                test_mask = graph.test_mask
-
-                splits = []
-                for i in range(train_mask.shape[1]):
-                    splits.append({
-                        'train': train_mask[:, i].bool(),
-                        'val': val_mask[:, i].bool(),
-                        'test': test_mask[:, i].bool(),
-                    })
-
-            else:
-                splits = [get_split(graph, split_setting) for _ in range(repeat)]
-
-        # TODO: Specialized Preprocess for following datasets?
-        elif name in ['pascalvoc-sp', 'coco-sp']:
-            train_set = LRGBDataset(data_path, name, split='train', transform=transform)
-            val_set = LRGBDataset(data_path, name, split='val', transform=transform)
-            test_set = LRGBDataset(data_path, name, split='test', transform=transform)
-
-            # TODO: Append positional encoding to node features
-
-            return {'train': train_set, 'val': val_set, 'test': test_set}, None
-
-        elif name in ['PATTERN', 'CLUSTER']:
-            train_set = GNNBenchmarkDataset(data_path, name, split='train', transform=transform)
-            val_set = GNNBenchmarkDataset(data_path, name, split='val', transform=transform)
-            test_set = GNNBenchmarkDataset(data_path, name, split='test', transform=transform)
-
-            # TODO: Append positional encoding to node features
-
-            return {'train': train_set, 'val': val_set, 'test': test_set}, None
+            splits = []
+            for i in range(train_mask.shape[1]):
+                splits.append({
+                    'train': train_mask[:, i].bool(),
+                    'val': val_mask[:, i].bool(),
+                    'test': test_mask[:, i].bool(),
+                })
 
         else:
-            raise ValueError("Dataset name error!")
+            splits = [get_split(graph, split_setting) for _ in range(repeat)]
 
-        graph_set[name] = graph
-        split_set[name] = splits
+    # TODO: Specialized Preprocess for following datasets?
+    elif name in ['pascalvoc-sp', 'coco-sp']:
+        train_set = LRGBDataset(data_path, name, split='train', transform=transform)
+        val_set = LRGBDataset(data_path, name, split='val', transform=transform)
+        test_set = LRGBDataset(data_path, name, split='test', transform=transform)
 
-    # return graph, splits
-    return graph_set, split_set
+        # TODO: Append positional encoding to node features
+
+        return {'train': train_set, 'val': val_set, 'test': test_set}, None
+
+    elif name in ['PATTERN', 'CLUSTER']:
+        train_set = GNNBenchmarkDataset(data_path, name, split='train', transform=transform)
+        val_set = GNNBenchmarkDataset(data_path, name, split='val', transform=transform)
+        test_set = GNNBenchmarkDataset(data_path, name, split='test', transform=transform)
+
+        # TODO: Append positional encoding to node features
+
+        return {'train': train_set, 'val': val_set, 'test': test_set}, None
+
+    else:
+        raise ValueError("Dataset name error!")
+
+        # graph_set[name] = graph
+        # split_set[name] = splits
+
+    return graph, splits
+    # return graph_set, split_set
 
 
-def load_link_task(params):
-    name = params['dataset']
+def load_link_task(name, params):
+    # name = params['dataset']
     data_path = params['data_path']
 
     if params['node_pe'] == 'rw':
@@ -488,12 +486,12 @@ def load_link_task(params):
         return graph, splits
 
 
-def load_graph_task(params):
-    name = params['dataset']
+def load_graph_task(name, params):
+    # name = params['dataset']
     data_path = params['data_path']
     split_setting = params['split']
 
-    assert split_setting == 'public'
+    # assert split_setting == 'public'
 
     if params['node_pe'] == 'rw':
         transform = T.Compose([T.AddRandomWalkPE(params['node_pe_dim'], 'pe')])
@@ -593,25 +591,25 @@ def load_graph_task(params):
             mean, std = dataset.data.y.mean(), dataset.data.y.std()
             dataset._data.y = (dataset.data.y - mean) / std
 
-        if split_setting == 'public':
-            split_idx = dataset.get_idx_split()
-            train_set = dataset[split_idx['train']]
-            val_set = dataset[split_idx['valid']]
-            test_set = dataset[split_idx['test']]
+        # if split_setting == 'public':
+        #     split_idx = dataset.get_idx_split()
+        #     train_set = dataset[split_idx['train']]
+        #     val_set = dataset[split_idx['valid']]
+        #     test_set = dataset[split_idx['test']]
 
-            train_mask = split_idx['train']
-            val_mask = split_idx['valid']
-            test_mask = split_idx['test']
+        #     train_mask = split_idx['train']
+        #     val_mask = split_idx['valid']
+        #     test_mask = split_idx['test']
 
-            # return {'train': train_set, 'val': val_set, 'test': test_set}, None
-            return dataset, [{'train': train_mask, 'val': val_mask, 'test': test_mask}] * params['split_repeat']
+        #     # return {'train': train_set, 'val': val_set, 'test': test_set}, None
+        #     return dataset, [{'train': train_mask, 'val': val_mask, 'test': test_mask}] * params['split_repeat']
 
-        else:
-            splits = [get_graph_split(dataset)] * params['split_repeat']
-            return dataset, splits
+        # else:
+        splits = [get_graph_split(dataset)] * params['split_repeat']
+        return dataset, splits
 
     elif name in ['mutag', 'nci1', 'dd', 'proteins', 'enzymes']:
-        assert split_setting == 'public'
+        # assert split_setting == 'public'
 
         name_map = {'mutag': 'MUTAG', 'nci1': 'NCI1', 'dd': 'DD', 'proteins': 'PROTEINS', 'enzymes': 'ENZYMES'}
         name = name_map[name]
@@ -637,7 +635,7 @@ def load_graph_task(params):
         return dataset, splits
 
     elif name in ['collab', 'imdb-b', 'imdb-m', 'reddit-b', 'reddit-m5k', 'reddit-m12k']:
-        assert split_setting == 'public'
+        # assert split_setting == 'public'
         name_map = {'collab': 'COLLAB', 'imdb-b': 'IMDB-BINARY', 'imdb-m': 'IMDB-MULTI', 'reddit-b': 'REDDIT-BINARY',
                     'reddit-m5k': 'REDDIT-MULTI-5K', 'reddit-m12k': 'REDDIT-MULTI-12K'}
         name = name_map[name]
@@ -726,13 +724,20 @@ def load_graph_task(params):
 
 
 def load_data(params):
-    task = params['task']
 
-    if task == 'node':
-        return load_node_task(params)
-    elif task == 'link':
-        return load_link_task(params)
-    elif task == 'graph':
-        return load_graph_task(params)
-    else:
-        raise NotImplementedError('The function is not implemented yet!')
+    name_set = params['dataset'].strip().split(';')
+    datasets, splits = {}, {}
+    for name in name_set:
+        task = params['task'][name]
+
+        if task == 'node':
+            dataset, split = load_node_task(name, params)
+        elif task == 'link':
+            dataset, split = load_link_task(name, params)
+        elif task == 'graph':
+            dataset, split = load_graph_task(name, params)
+        else:
+            raise NotImplementedError('The function is not implemented yet!')
+        datasets[name] = dataset
+        splits[name] = split
+    return datasets, splits
