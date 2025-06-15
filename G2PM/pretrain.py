@@ -29,8 +29,8 @@ from utils.utils import seed_everything, check_path, get_num_params, to_millions
 import wandb
 
 
-def get_preprocess(params):
-    task = params["task"]
+def get_preprocess(dataset, params):
+    task = params["task"][dataset]
 
     if task == "node":
         return preprocess_node
@@ -42,8 +42,8 @@ def get_preprocess(params):
         raise ValueError("Does not support the task in preprocessing.")
 
 
-def get_train(params):
-    task = params["task"]
+def get_train(dataset, params):
+    task = params["task"][dataset]
 
     if task == "node":
         return pretrain_node
@@ -53,8 +53,8 @@ def get_train(params):
         raise ValueError("Does not support the task in finetuning.")
 
 
-def get_eval(params):
-    task = params["task"]
+def get_eval(dataset, params):
+    task = params["task"][dataset]
 
     if task == "node":
         return linear_probe_node
@@ -72,7 +72,7 @@ def run(params):
     print("Use Device:", device)
 
     # Helper function to get input and edge dimensions
-    def get_input_edge_dims(g):
+    def get_input_edge_dims(g, dataset):
         if isinstance(g, Data):
             input_dim = g.x.size(1)
             edge_dim = g.edge_attr.size(1) if g.edge_attr is not None else 0
@@ -85,17 +85,18 @@ def run(params):
         else:
             raise ValueError(f"Unsupported graph type: {type(g)}")
             
-        if params['dataset'] in mol_graphs:
+        # if params['dataset'] in mol_graphs:
+        if dataset in mol_graphs:
             input_dim = edge_dim = 100
             
         return input_dim, edge_dim
     
-    def get_num_instances(g, params):
-        if params['task'] == 'node':
+    def get_num_instances(g, dataset, params):
+        if params['task'][dataset] == 'node':
             return g.num_nodes
-        elif params['task'] == 'link':
+        elif params['task'][dataset] == 'link':
             return g.num_edges
-        elif params['task'] == 'graph':
+        elif params['task'][dataset] == 'graph':
             return len(g) if not isinstance(g, dict) else len(g['all'])
         else:
             raise ValueError(f"Unsupported graph type: {type(g)}")
@@ -110,15 +111,18 @@ def run(params):
     # Set dimensions based on data
     if params['node_pe'] == 'none':
         params['node_pe_dim'] = 0
+    
+    # TODO: multi-graph adaptation
     # Generate a fixed train mask for pretraining, default is no mask
-    params['train_mask'] = torch.rand(get_num_instances(graph, params)) < params['train_mask_ratio'] if params['train_mask_ratio'] > 0 else None
+    # params['train_mask'] = torch.rand(get_num_instances(graph, params)) < params['train_mask_ratio'] if params['train_mask_ratio'] > 0 else None
+    params['train_mask'] = None
 
     params['input_dim'], params['edge_dim'] = {}, {}
     params['output_dim'] = {}
     params['num_tasks'] = {}
     steps_per_epoch = 0
     for name, graph in graph_set.items():
-        input_dim, edge_dim = get_input_edge_dims(graph)
+        input_dim, edge_dim = get_input_edge_dims(graph, name)
         params['input_dim'][name] = input_dim
         params['edge_dim'][name] = edge_dim
         num_tasks = data_config[name].get('num_tasks', None)
@@ -127,18 +131,19 @@ def run(params):
             params['output_dim'][name] = num_tasks
         else:
             params['output_dim'][name] = graph.y.max().item() + 1
-        steps_per_epoch += (get_num_instances(graph, params) + params['batch_size'] - 1) // params['batch_size']
+        steps_per_epoch += (get_num_instances(graph, name, params) + params['batch_size'] - 1) // params['batch_size']
     params['steps_per_epoch'] = steps_per_epoch
 
     # Get core functions
-    preprocess_fn = get_preprocess(params)
-    train_fn = get_train(params)
-    eval_fn = get_eval(params)
+    # preprocess_fn = get_preprocess(params)
+    # train_fn = get_train(params)
+    # eval_fn = get_eval(params)
 
     # Preprocess graph patterns
     start_time = time.time()
     pattern_set = {}
     for name, graph in graph_set.items():
+        preprocess_fn = get_preprocess(name, params)
         pattern_set[name] = preprocess_fn(graph, name, params)
     params['pattern_set'] = pattern_set
     preprocess_time = time.time() - start_time
@@ -177,6 +182,7 @@ def run(params):
         start_time = time.time()
         total_loss = {'train': 0., 'val': 0., 'test': 0.}
         for name, graph in graph_set.items():
+            train_fn = get_train(name, params)
             loss = train_fn(graph, model, optimizer, name, scheduler=scheduler, params=params)
             total_loss['train'] += loss['train']
             total_loss['val'] += loss['val']
@@ -189,33 +195,41 @@ def run(params):
         if (epoch % params['eval_every'] == 0) and (params['split'] != 'pretrain'):
             if not params['use_vq']:
                 start_time = time.time()
-                result = []
-                aggr_result = {'train': 0, 'train_std': 0, 
-                                'val': 0, 'val_std': 0, 
-                                'test': 0, 'test_std': 0, 
-                                'metric': params['metric']}
+                # result = []
+                # aggr_result = {'train': 0, 'train_std': 0, 
+                #                 'val': 0, 'val_std': 0, 
+                #                 'test': 0, 'test_std': 0, 
+                #                 'metric': params['metric']}
+
+                # Only use the first specified dataset as eval dataset (Unseen datasets can't used for evaluation for now, because feat projection layer needs training)
                 for name, graph in graph_set.items():
-                    result.append(eval_fn(graph, model, splits_set[name], name, params=params))
-                    result[-1]['dataset'] = name
-                val_size, test_size = 0, 0
-                for r in result:
-                    aggr_result['val'] += r['val'] * r['val_size']
-                    aggr_result['test'] += r['test'] * r['test_size']
-                    aggr_result['val_std'] += r['val_std'] * r['val_size']
-                    aggr_result['test_std'] += r['test_std'] * r['test_size']
-                    val_size += r['val_size']
-                    test_size += r['test_size']
-                aggr_result['val'] /= val_size
-                aggr_result['val_std'] /= val_size
-                aggr_result['test'] /= test_size
-                aggr_result['test_std'] /= test_size
+                    eval_fn = get_eval(name, params)
+                    # result.append(eval_fn(graph, model, splits_set[name], name, params=params))
+                    # result[-1]['dataset'] = name
+                    result = eval_fn(graph, model, splits_set[name], name, params=params)
+                    result['dataset'] = name
+                    break
+                # val_size, test_size = 0, 0
+                # for r in result:
+                #     aggr_result['val'] += r['val'] * r['val_size']
+                #     aggr_result['test'] += r['test'] * r['test_size']
+                #     aggr_result['val_std'] += r['val_std'] * r['val_size']
+                #     aggr_result['test_std'] += r['test_std'] * r['test_size']
+                #     val_size += r['val_size']
+                #     test_size += r['test_size']
+                # aggr_result['val'] /= val_size
+                # aggr_result['val_std'] /= val_size
+                # aggr_result['test'] /= test_size
+                # aggr_result['test_std'] /= test_size
                 
                 inference_time = time.time() - start_time
                 inference_times.append(inference_time)
 
                 # logger, stopper have adapted to multi-graph setting
-                is_stop = stopper(aggr_result)
-                logger.log_pretrain(epoch, loss, aggr_result)
+                # is_stop = stopper(aggr_result)
+                # logger.log_pretrain(epoch, loss, aggr_result)
+                is_stop = stopper(result)
+                logger.log_pretrain(epoch, loss, result)
                 if is_stop:
                     print("Early Stopping at Epoch:", epoch)
                     break
@@ -228,21 +242,31 @@ def run(params):
                     "time/duration_inference": inference_time
                 })
 
-                for r in result:
-                    wandb.log({
-                        "dataset": r['dataset'],
-                        "training results/train_value": r['train'],
-                        "training results/val_value": r['val'],
-                        "training results/test_value": r['test'],
-                        "training results/train_std": r['train_std'],
-                        "training results/val_std": r['val_std'],
-                        "training results/test_std": r['test_std'],
-                    })
-                
                 wandb.log({
-                    "Overall results/val_value": aggr_result['val'],
-                    "Overall results/test_value": aggr_result['test']
+                    "dataset": result['dataset'],
+                    "training results/train_value": result['train'],
+                    "training results/val_value": result['val'],
+                    "training results/test_value": result['test'],
+                    "training results/train_std": result['train_std'],
+                    "training results/val_std": result['val_std'],
+                    "training results/test_std": result['test_std'],
                 })
+
+                # for r in result:
+                #     wandb.log({
+                #         "dataset": r['dataset'],
+                #         "training results/train_value": r['train'],
+                #         "training results/val_value": r['val'],
+                #         "training results/test_value": r['test'],
+                #         "training results/train_std": r['train_std'],
+                #         "training results/val_std": r['val_std'],
+                #         "training results/test_std": r['test_std'],
+                #     })
+                
+                # wandb.log({
+                #     "Overall results/val_value": aggr_result['val'],
+                #     "Overall results/test_value": aggr_result['test']
+                # })
 
             else:
                 loss['val'] = -loss['train']
@@ -338,17 +362,23 @@ def main():
     with open(data_config, 'r') as f:
         data_config = yaml.safe_load(f)
     params['data_config'] = data_config
-    # Current assumptions: different datasets share the same task and eval metrics, they only differ in feat dim and graph structures.
+    # Current assumptions: Eval dataset is the first specified dataset
     datasets = params['dataset'].strip().split(';')
-    params['task'] = data_config[datasets[0]]['task']
+    # params['task'], params['metric'] = {}, {}
+    params['task'] = {}
+    for name in datasets:
+        params['task'][name] = data_config[name]['task']
+        # params['metric'][name] = data_config[name]['metric']
+    # params['task'] = data_config[datasets[0]]['task']
     params['metric'] = data_config[datasets[0]]['metric']
-    # params['num_tasks'] = data_config[params['dataset']].get('num_tasks', None)
+
+    # # params['num_tasks'] = data_config[params['dataset']].get('num_tasks', None)
 
     if params["use_params"]:
         with open(osp.join(osp.dirname(__file__), '..', 'config', 'pretrain.yaml'), 'r') as f:
             default_params = yaml.safe_load(f)
             # TODO: Unify experimental settings for different datasets
-            params.update(default_params[params['task']][datasets[0]])
+            params.update(default_params[params['task'][datasets[0]]][datasets[0]])
 
     if params['no_node_pe']:
         params['node_pe'] = 'none'
