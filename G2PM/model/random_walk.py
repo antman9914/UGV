@@ -82,9 +82,9 @@ def get_patterns_for_graph(dataset, params):
                 patterns.append(cur_patterns.detach())
                 eids.append(cur_eids.detach())
 
-            patterns = torch.cat(patterns, dim=1)
+            patterns = torch.cat(patterns, dim=0)
             nids = graph.x[patterns].squeeze()
-            eids = torch.cat(eids, dim=1)
+            eids = torch.cat(eids, dim=0)
             if graph.edge_attr is not None:
                 eids = graph.edge_attr[eids].squeeze()
         else:

@@ -165,7 +165,7 @@ class PatternEncoder(nn.Module):
 
         return pattern_feat, raw_feat
 
-    def encode_graph(self, nids, feat, patterns, eids=None, e_feat=None, node_pe=None, params=None):
+    def encode_graph(self, dataset, nids, feat, patterns, eids=None, e_feat=None, node_pe=None, params=None):
         device = get_device_from_model(self)
 
         h, n, k = patterns.shape
@@ -193,7 +193,8 @@ class PatternEncoder(nn.Module):
 
             feat_gathered = torch.cat([feat_gathered, e_feat_gathered], dim=-1)
 
-        feat_gathered = self.pre_projection(feat_gathered)
+        raw_feat = feat_gathered
+        feat_gathered = self.pre_projection[dataset](feat_gathered)
 
         multiscale = params['multiscale']
         if len(multiscale) > 1:
@@ -208,9 +209,11 @@ class PatternEncoder(nn.Module):
         pattern_feat = self._encode_features(feat_gathered, mask)
         pattern_feat = pattern_feat.view(h, n, self.hidden_dim)
 
+        raw_feat = raw_feat.mean(dim=1).view(h, n, self.input_dim[dataset])
+
         if self.pe_encoder != 'none':
             pe = self._encode_pe(patterns)
             pe = pe.view(h, n, -1)
             pattern_feat = pattern_feat + pe * params['pe_weight']
 
-        return pattern_feat
+        return pattern_feat, raw_feat

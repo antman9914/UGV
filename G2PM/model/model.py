@@ -173,9 +173,9 @@ class BaseModel(nn.Module):
             nn.init.normal_(self.cls_token, std=0.02)
 
         # TODO: Adaptation for graph-level tasks
-        if params['dataset'] in mol_graphs:
-            self.atom_encoder = AtomEncoder(emb_dim=100)
-            self.bond_encoder = BondEncoder(emb_dim=100)
+        # if params['dataset'] in mol_graphs:
+        self.atom_encoder = AtomEncoder(emb_dim=100)
+        self.bond_encoder = BondEncoder(emb_dim=100)
 
         self.register_buffer('pre_transformation', None)
 
@@ -207,14 +207,14 @@ class BaseModel(nn.Module):
 
     def forward(self, dataset, graph, items, params, mode, **kwargs):
         # mode = kwargs['mode']
-        if params['task'] == 'node':
+        if params['task'][dataset] == 'node':
             return self.encode_node(dataset, graph, items, params, mode)
-        elif params['task'] == 'link':
+        elif params['task'][dataset] == 'link':
             return self.encode_link(dataset, graph, items, params, mode)
-        elif params['task'] == 'graph':
+        elif params['task'][dataset] == 'graph':
             return self.encode_graph(dataset, graph, items, params, mode)
         else:
-            raise ValueError(f"Unsupported task: {params['task']}")
+            raise ValueError(f"Unsupported task: {params['task'][dataset]}")
 
     def pretrain_vq_node(self, graph, nodes, dataset, params):
         device = get_device_from_model(self)
@@ -265,6 +265,89 @@ class BaseModel(nn.Module):
         else:
             pattern_quant = None
             commit_loss = 0
+
+        # if params['use_cls_token']:
+        #     pattern_feat = torch.cat([self.cls_token.repeat(1, pattern_feat.size(1), 1), pattern_feat], dim=0)
+        # pattern_emb = self.transformer_encode(pattern_feat)
+        # instance_emb = self.get_instance_emb(pattern_emb, params)
+
+        # pred = self.head(instance_emb)
+
+        # return pred, instance_emb, pattern_emb, commit_loss
+
+        return pattern_feat, pattern_quant, commit_loss
+    
+
+    def pretrain_vq_graph(self, graph, graphs, dataset, params):
+        device = get_device_from_model(self)
+
+        feat = graph._data.x_feat.to(device)
+
+        # Get patterns
+        num_patterns = params['num_patterns']
+        pattern_set = params['pattern_set'][dataset]
+        # if pattern_set.get('train') is not None:
+            # pattern_set = pattern_set[mode] if params['split'] != 'pretrain' else pattern_set['full']
+
+        # Get patterns for target graphs
+        all_patterns = pattern_set['pattern']
+        all_nid = pattern_set['nid']
+        selected_patterns = all_patterns[:, graphs, :]
+        selected_nid = all_nid[:, graphs, :]
+        h, num_graphs, k = selected_nid.shape
+
+        # In training, selecting a subset of patterns
+        if self.training:
+            idx = torch.randint(0, h, (num_graphs, num_patterns))
+            patterns = torch.stack([selected_patterns[idx[i], i, :] for i in range(num_graphs)], dim=1).to(device)
+            nids = torch.stack([selected_nid[idx[i], i, :] for i in range(num_graphs)], dim=1).to(device)
+        else:
+            patterns = selected_patterns.to(device)
+            nids = selected_nid.to(device)
+
+        if graph[0].get('pe') is not None:
+            node_pe_list = [graph[g].pe for g in graphs]
+            max_nodes = max(pe.size(0) for pe in node_pe_list)
+            dim = node_pe_list[0].size(1)
+            node_pe = torch.zeros((len(node_pe_list), max_nodes, dim))
+            for i, pe in enumerate(node_pe_list):
+                node_pe[i, :pe.size(0), :] = pe
+            node_pe = node_pe.to(device)
+        else:
+            node_pe = None
+
+        if graph._data.edge_attr is not None:
+            e_feat = graph._data.e_feat.to(device)
+            all_eid = pattern_set['eid']
+            selected_eid = all_eid[:, graphs, :]
+            if self.training:
+                eids = torch.stack([selected_eid[idx[i], i, :] for i in range(num_graphs)], dim=1).to(device)
+            else:
+                eids = selected_eid.to(device)
+        else:
+            e_feat = None
+            eids = None
+
+        if dataset in mol_graphs:
+            feat = self.atom_encoder(feat)
+            if e_feat is not None:
+                e_feat = self.bond_encoder(e_feat)
+
+        pattern_feat, raw_feat = self.pattern_encoder.encode_graph(dataset, nids, feat, patterns, eids, e_feat, node_pe, params)
+
+        if params['use_vq']:
+            pattern_quant, _, commit_loss, _ = self.vq(pattern_feat)
+            pattern_quant = self.pattern_decoder(pattern_quant)
+            pattern_quant = self.post_proj[dataset](pattern_quant)
+            commit_loss = commit_loss + F.mse_loss(raw_feat, pattern_quant)
+        else:
+            pattern_quant = None
+            commit_loss = 0
+
+        # if params['use_vq']:
+        # pattern_feat, _, commit_loss, _ = self.vq(pattern_feat)
+        # else:
+        #     commit_loss = 0
 
         # if params['use_cls_token']:
         #     pattern_feat = torch.cat([self.cls_token.repeat(1, pattern_feat.size(1), 1), pattern_feat], dim=0)
@@ -453,7 +536,7 @@ class BaseModel(nn.Module):
             if e_feat is not None:
                 e_feat = self.bond_encoder(e_feat)
 
-        pattern_feat = self.pattern_encoder.encode_graph(dataset, nids, feat, patterns, eids, e_feat, node_pe, params)
+        pattern_feat, _ = self.pattern_encoder.encode_graph(dataset, nids, feat, patterns, eids, e_feat, node_pe, params)
 
         # if params['use_vq']:
         pattern_feat, _, commit_loss, _ = self.vq(pattern_feat)
@@ -686,7 +769,7 @@ class PretrainModel(BaseModel):
 
         return loss
 
-    def pretrain_graph(self, graph, graphs, params):
+    def pretrain_graph(self, graph, graphs, dataset, params):
         device = get_device_from_model(self)
 
         feat = graph._data.x_feat.to(device)
@@ -699,7 +782,7 @@ class PretrainModel(BaseModel):
         visible_pattern_count = params['num_patterns']
         masked_pattern_count = total_pattern_count - visible_pattern_count
 
-        pattern_dict = params['pattern_set']  # TODO: this can be extracted on-the-fly
+        pattern_dict = params['pattern_set'][dataset]  # TODO: this can be extracted on-the-fly
         graph_patterns = pattern_dict['pattern'][:, graphs, :]
         nids = pattern_dict['nid'][:, graphs, :]
         num_patterns, num_graphs, pattern_length = graph_patterns.shape
@@ -724,7 +807,7 @@ class PretrainModel(BaseModel):
             e_feat = None
             eids = None
 
-        if params['dataset'] in mol_graphs:
+        if dataset in mol_graphs:
             feat = self.atom_encoder(feat)
             if e_feat is not None:
                 e_feat = self.bond_encoder(e_feat)
@@ -735,30 +818,30 @@ class PretrainModel(BaseModel):
         mask = torch.zeros(num_patterns, dtype=torch.bool, device=device)
         mask[shuffle_idx[visible_pattern_count:]] = True
 
-        # Get reconstruction target
-        if params['objective_on'] == 'emb':
-            pattern_feat = self.online_pattern_encoder.encode_graph(nids, feat, graph_patterns, eids, e_feat, node_pe, params)
-            target = self.online_transformer_encode(pattern_feat).detach()
-        elif params['objective_on'] == 'raw_mean':
-            target = feat[graph_patterns].mean(dim=2).to(device)
-        elif params['objective_on'] == 'raw_concat':
-            target = feat[graph_patterns].view(num_patterns, num_graphs, -1).to(device)
-        else:
-            raise ValueError(f"Unsupported objective on: {params['objective_on']}")
+        # # Get reconstruction target
+        # if params['objective_on'] == 'emb':
+        #     pattern_feat = self.online_pattern_encoder.encode_graph(nids, feat, graph_patterns, eids, e_feat, node_pe, params)
+        #     target = self.online_transformer_encode(pattern_feat).detach()
+        # elif params['objective_on'] == 'raw_mean':
+        #     target = feat[graph_patterns].mean(dim=2).to(device)
+        # elif params['objective_on'] == 'raw_concat':
+        #     target = feat[graph_patterns].view(num_patterns, num_graphs, -1).to(device)
+        # else:
+        #     raise ValueError(f"Unsupported objective on: {params['objective_on']}")
 
-        # Get auxiliary target
-        if params['auxiliary_objective'] == 'ap_mean':
-            adj = graph_patterns.unsqueeze(-1) == graph_patterns.unsqueeze(-2)
-            adj = adj.view(-1, pattern_length, pattern_length).float()
-            aux_target = adj.mean(dim=2).view(num_patterns, num_graphs, -1).to(device)
-        elif params['auxiliary_objective'] == 'ap_concat':
-            adj = graph_patterns.unsqueeze(-1) == graph_patterns.unsqueeze(-2)
-            adj = adj.view(-1, pattern_length, pattern_length).float()
-            aux_target = adj.view(num_patterns, num_graphs, -1).to(device)
-        elif params['auxiliary_objective'] == 'none':
-            pass
-        else:
-            raise ValueError(f"Unsupported auxiliary objective: {params['auxiliary_objective']}")
+        # # Get auxiliary target
+        # if params['auxiliary_objective'] == 'ap_mean':
+        #     adj = graph_patterns.unsqueeze(-1) == graph_patterns.unsqueeze(-2)
+        #     adj = adj.view(-1, pattern_length, pattern_length).float()
+        #     aux_target = adj.mean(dim=2).view(num_patterns, num_graphs, -1).to(device)
+        # elif params['auxiliary_objective'] == 'ap_concat':
+        #     adj = graph_patterns.unsqueeze(-1) == graph_patterns.unsqueeze(-2)
+        #     adj = adj.view(-1, pattern_length, pattern_length).float()
+        #     aux_target = adj.view(num_patterns, num_graphs, -1).to(device)
+        # elif params['auxiliary_objective'] == 'none':
+        #     pass
+        # else:
+        #     raise ValueError(f"Unsupported auxiliary objective: {params['auxiliary_objective']}")
 
         # Apply augmentations to features and patterns
         if not params['mix_aug']:
@@ -787,9 +870,12 @@ class PretrainModel(BaseModel):
 
         # Get pattern features
         if eids is not None:
-            pattern_feat = self.pattern_encoder.encode_graph(nids[shuffle_idx[:visible_pattern_count]], feat_aug, graph_patterns_aug[shuffle_idx[:visible_pattern_count]], eids[shuffle_idx[:visible_pattern_count]], e_feat_aug, node_pe, params)
+            pattern_feat, _ = self.pattern_encoder.encode_graph(dataset, nids, feat_aug, graph_patterns_aug, eids, e_feat_aug, node_pe, params)
         else:
-            pattern_feat = self.pattern_encoder.encode_graph(nids[shuffle_idx[:visible_pattern_count]], feat_aug, graph_patterns_aug[shuffle_idx[:visible_pattern_count]], None, None, node_pe, params)
+            pattern_feat, _ = self.pattern_encoder.encode_graph(dataset, nids, feat_aug, graph_patterns_aug, None, None, node_pe, params)
+
+        _, emb_ind, _, _ = self.vq(pattern_feat)
+        pattern_feat = pattern_feat[shuffle_idx[:visible_pattern_count]]
 
         # 2. Add mask tokens for missing patterns
         if params['mask_token'] in ['learnable', 'fixed']:
@@ -797,41 +883,45 @@ class PretrainModel(BaseModel):
         elif params['mask_token'] == 'random':
             mask_tokens = torch.randn(masked_pattern_count, pattern_feat.size(1), self.hidden_dim, device=device)
         elif params['mask_token'] == 'replace':
-            full_pattern_feat = self.pattern_encoder.encode_graph(nids, feat_aug, graph_patterns_aug, eids, e_feat, node_pe, params)
+            full_pattern_feat, _ = self.pattern_encoder.encode_graph(dataset, nids, feat_aug, graph_patterns_aug, eids, e_feat, node_pe, params)
             mask_tokens = full_pattern_feat[torch.randperm(num_patterns)[:masked_pattern_count]].detach()
         else:
             raise ValueError(f"Unsupported mask token type: {params['mask_token']}")
 
-        if params['architecture'] == 'mae':
-            pattern_emb = self.transformer_encode(pattern_feat)
-            pattern_emb_with_mask = torch.cat([pattern_emb, mask_tokens], dim=0)
-            pattern_emb_with_mask = pattern_emb_with_mask[unshuffle_idx]
+        # if params['architecture'] == 'mae':
+        #     pattern_emb = self.transformer_encode(pattern_feat)
+        #     pattern_emb_with_mask = torch.cat([pattern_emb, mask_tokens], dim=0)
+        #     pattern_emb_with_mask = pattern_emb_with_mask[unshuffle_idx]
 
-            recon_pattern_emb = self.transformer_decode(pattern_emb_with_mask)
+        #     recon_pattern_emb = self.transformer_decode(pattern_emb_with_mask)
 
-        elif params['architecture'] == 'simmim':
-            pattern_feat_with_mask = torch.cat([pattern_feat, mask_tokens], dim=0)
+        # elif params['architecture'] == 'simmim':
+        pattern_feat_with_mask = torch.cat([pattern_feat, mask_tokens], dim=0)
 
-            pattern_emb = self.transformer_encode(pattern_feat_with_mask)
-            pattern_emb = pattern_emb[unshuffle_idx]
+        pattern_emb = self.transformer_encode(pattern_feat_with_mask)
+        pattern_emb = pattern_emb[unshuffle_idx]
 
-            recon_pattern_emb = self.decoder(pattern_emb)
+        # recon_pattern_emb = self.decoder(pattern_emb)
 
         # Calculate reconstruction loss on masked tokens only
-        loss_fn = F.mse_loss if params['loss_fn'] == 'l2' else F.l1_loss
+        # loss_fn = F.mse_loss if params['loss_fn'] == 'l2' else F.l1_loss
+        pred = self.mask_decoder(pattern_emb)
+        emb_onehot = F.one_hot(emb_ind, num_classes=params['codebook_size']).float()
 
-        pred = self.linear_decoder(recon_pattern_emb)  # Project to final space
-        loss = loss_fn(pred[mask], target[mask])
+        # pred = self.linear_decoder(recon_pattern_emb)  # Project to final space
+        # loss = loss_fn(pred[mask], target[mask])
 
-        # Calculate auxiliary loss
-        if params['auxiliary_objective'] != 'none':
-            aux_pred = self.auxiliary_decoder(recon_pattern_emb)
-            loss_aux = loss_fn(aux_pred[mask], aux_target[mask])
-            loss = loss + loss_aux
+        loss = F.cross_entropy(pred[mask], emb_onehot[mask])
 
-        # Calculate consistency loss
-        if params['use_consistency']:
-            loss_con = loss_fn(recon_pattern_emb[~mask], target[~mask])
-            loss = loss + loss_con
+        # # Calculate auxiliary loss
+        # if params['auxiliary_objective'] != 'none':
+        #     aux_pred = self.auxiliary_decoder(recon_pattern_emb)
+        #     loss_aux = loss_fn(aux_pred[mask], aux_target[mask])
+        #     loss = loss + loss_aux
+
+        # # Calculate consistency loss
+        # if params['use_consistency']:
+        #     loss_con = loss_fn(recon_pattern_emb[~mask], target[~mask])
+        #     loss = loss + loss_con
 
         return loss
