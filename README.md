@@ -13,8 +13,4 @@ The pre-training of graph pattern encoder can be conducted after removing `--use
 python G2PM/pretrain.py --dataset computers;cora;arxiv --use_params
 ```
 
-## TODO
-
-The adaptability of multi-graph setting to graph classification task potentially needs improvement.
-
-Can't use node classification datasets and graph classification datasets at the same time for now.
+Only one dataset and its corresponding task is used for evaluation during pre-training under multi-graph setting. In our situation, the first specified dataset will be used for evaluation. For example, given instruction `--dataset computers;cora;arxiv`, computers will be the evaluation set. Given that each dataset is temporarily equipped with a pre-projection layer for feature alignment, it's not feasible to utilize unseen datasets for evaluation. 
