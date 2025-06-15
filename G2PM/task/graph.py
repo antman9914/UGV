@@ -50,13 +50,13 @@ def multitask_regression(y_pred, y, metric='rmse'):
     return loss / torch.sum(is_valid)
 
 
-def preprocess_graph(datasets, params):
+def preprocess_graph(datasets, name, params):
     pre_sample_pattern_num = params['pre_sample_pattern_num']
     pattern_size = params['pattern_size']
     p = params['p']
     q = params['q']
 
-    pattern_dir = osp.join(params['pattern_path'], params['dataset'])
+    pattern_dir = osp.join(params['pattern_path'], name)
     pattern_dict = {}
 
     if isinstance(datasets, dict):
@@ -99,7 +99,7 @@ def preprocess_graph(datasets, params):
             torch.save(eids, eid_path)
 
         pattern_dict = {'pattern': patterns, 'nid': nids, 'eid': eids}
-
+    
     return pattern_dict
 
 
@@ -202,7 +202,7 @@ def eval_graph(graph, model, split=None, params=None):
 
 
 
-def pretrain_graph(dataset, model, optimizer, scheduler=None, params=None):
+def pretrain_graph(dataset, model, optimizer, name, scheduler=None, params=None):
     if params['inference_only']:
         return {'train': 0, 'val': 0, 'test': 0}
 
@@ -219,8 +219,14 @@ def pretrain_graph(dataset, model, optimizer, scheduler=None, params=None):
 
     total_loss = 0
     for i in range(num_batches):
+        if i == 5:
+            break
         cur_graphs = graphs[i * bs: (i + 1) * bs]
-        loss = model.pretrain_graph(dataset, cur_graphs, params)
+        # loss = model.pretrain_graph(dataset, cur_graphs, params)
+        if not params['use_vq']:
+            loss = model.pretrain_graph(dataset, cur_graphs, name, params)
+        else:
+            _, _, loss = model.pretrain_vq_graph(dataset, cur_graphs, name, params)
 
         total_loss += loss.item()
 
@@ -233,9 +239,9 @@ def pretrain_graph(dataset, model, optimizer, scheduler=None, params=None):
         if scheduler is not None:
             scheduler.step()
 
-        if params['objective_on'] == 'emb':
-            if i % params['ema_update_every'] == 0:
-                model.ema_update(alpha=params['ema_alpha'])
+        # if params['objective_on'] == 'emb':
+        #     if i % params['ema_update_every'] == 0:
+        #         model.ema_update(alpha=params['ema_alpha'])
 
         wandb.log({
             "training dynamics/step-wise train_loss": loss.item(),
@@ -246,7 +252,7 @@ def pretrain_graph(dataset, model, optimizer, scheduler=None, params=None):
     return {'train': total_loss, 'val': 0, 'test': 0}
 
 
-def linear_probe_graph(graph, model, splits, params):
+def linear_probe_graph(graph, model, splits, name, params):
     model.eval()
     device = get_device_from_model(model)
 
@@ -264,7 +270,7 @@ def linear_probe_graph(graph, model, splits, params):
         num_batches = (num_graphs + bs - 1) // bs
         for i in range(num_batches):
             cur_graphs = graphs[i * bs: (i + 1) * bs]
-            _, instance_emb, _, _ = model(full_dataset, cur_graphs, params, mode='eval')
+            _, instance_emb, _, _ = model(name, full_dataset, cur_graphs, params, mode='eval')
             embeddings_list.append(instance_emb.detach().cpu())
 
     embeddings = torch.cat(embeddings_list, dim=0)
