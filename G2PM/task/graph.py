@@ -219,8 +219,8 @@ def pretrain_graph(dataset, model, optimizer, name, scheduler=None, params=None)
 
     total_loss = 0
     for i in range(num_batches):
-        if i == 5:
-            break
+        # if i == 5:
+        #     break
         cur_graphs = graphs[i * bs: (i + 1) * bs]
         # loss = model.pretrain_graph(dataset, cur_graphs, params)
         if not params['use_vq']:
