@@ -175,8 +175,8 @@ def pretrain_node(graph, model, optimizer, dataset, scheduler=None, params=None)
 
     total_loss = 0
     for i in range(num_batches):
-        if i == 5:
-            break
+        # if i == 5:
+        #     break
         cur_nodes = nodes[i * bs: (i + 1) * bs]
         if not params['use_vq']:
             loss = model.pretrain_node(graph, cur_nodes, dataset, params)
