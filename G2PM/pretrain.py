@@ -363,7 +363,7 @@ def main():
         data_config = yaml.safe_load(f)
     params['data_config'] = data_config
     # Current assumptions: Eval dataset is the first specified dataset
-    datasets = params['dataset'].strip().split(';')
+    datasets = params['dataset'].strip().split(',')
     # params['task'], params['metric'] = {}, {}
     params['task'] = {}
     for name in datasets:
