@@ -725,7 +725,7 @@ def load_graph_task(name, params):
 
 def load_data(params):
 
-    name_set = params['dataset'].strip().split(';')
+    name_set = params['dataset'].strip().split(',')
     datasets, splits = {}, {}
     for name in name_set:
         task = params['task'][name]
